@@ -6,7 +6,7 @@ from urllib.parse import unquote
 import google.generativeai as genai
 from adalflow.components.model_client.ollama_client import OllamaClient
 from adalflow.core.types import ModelType
-from fastapi import WebSocket, WebSocketDisconnect, HTTPException, WebSocketState
+from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel, Field
 
 from api.config import get_model_config
@@ -122,34 +122,64 @@ async def handle_websocket_chat(websocket: WebSocket):
         except ValueError as e:
             if "No valid documents with embeddings found" in str(e):
                 logger.error(f"No valid embeddings found: {str(e)}")
-                await websocket.send_text("Error: No valid document embeddings found. This may be due to embedding size inconsistencies or API errors during document processing. Please try again or check your repository content.")
-                await websocket.close()
+                try:
+                    await websocket.send_text("Error: No valid document embeddings found. This may be due to embedding size inconsistencies or API errors during document processing. Please try again or check your repository content.")
+                except Exception as e_send:
+                    logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                try:
+                    await websocket.close()
+                except Exception as e_close:
+                    logger.error(f"Failed to close WebSocket: {str(e_close)}")
                 return
             else:
                 logger.error(f"ValueError preparing retriever: {str(e)}")
-                await websocket.send_text(f"Error preparing retriever: {str(e)}")
-                await websocket.close()
+                try:
+                    await websocket.send_text(f"Error preparing retriever: {str(e)}")
+                except Exception as e_send:
+                    logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                try:
+                    await websocket.close()
+                except Exception as e_close:
+                    logger.error(f"Failed to close WebSocket: {str(e_close)}")
                 return
         except Exception as e:
             logger.error(f"Error preparing retriever: {str(e)}")
-            # Check for specific embedding-related errors
-            if "All embeddings should be of the same size" in str(e):
-                await websocket.send_text("Error: Inconsistent embedding sizes detected. Some documents may have failed to embed properly. Please try again.")
-            else:
-                await websocket.send_text(f"Error preparing retriever: {str(e)}")
-            await websocket.close()
+            try:
+                # Check for specific embedding-related errors
+                if "All embeddings should be of the same size" in str(e):
+                    await websocket.send_text("Error: Inconsistent embedding sizes detected. Some documents may have failed to embed properly. Please try again.")
+                else:
+                    await websocket.send_text(f"Error preparing retriever: {str(e)}")
+            except Exception as e_send:
+                logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+            try:
+                await websocket.close()
+            except Exception as e_close:
+                logger.error(f"Failed to close WebSocket: {str(e_close)}")
             return
 
         # Validate request
         if not request.messages or len(request.messages) == 0:
-            await websocket.send_text("Error: No messages provided")
-            await websocket.close()
+            try:
+                await websocket.send_text("Error: No messages provided")
+            except Exception as e_send:
+                logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+            try:
+                await websocket.close()
+            except Exception as e_close:
+                logger.error(f"Failed to close WebSocket: {str(e_close)}")
             return
 
         last_message = request.messages[-1]
         if last_message.role != "user":
-            await websocket.send_text("Error: Last message must be from the user")
-            await websocket.close()
+            try:
+                await websocket.send_text("Error: Last message must be from the user")
+            except Exception as e_send:
+                logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+            try:
+                await websocket.close()
+            except Exception as e_close:
+                logger.error(f"Failed to close WebSocket: {str(e_close)}")
             return
 
         # Process previous messages to build conversation history
@@ -550,13 +580,21 @@ This file contains...
                         async for chunk in response:
                             await websocket.send_text(chunk)
                         # Explicitly close the WebSocket connection after the response is complete
-                        await websocket.close()
+                        try:
+                            await websocket.close()
+                        except Exception as e_close:
+                            logger.error(f"Failed to close WebSocket: {str(e_close)}")
                     except Exception as e_openrouter:
                         logger.error(f"Error with OpenRouter API: {str(e_openrouter)}")
                         error_msg = f"\nError with OpenRouter API: {str(e_openrouter)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
-                        await websocket.send_text(error_msg)
-                        # Close the WebSocket connection after sending the error message
-                        await websocket.close()
+                        try:
+                            await websocket.send_text(error_msg)
+                        except Exception as e_send:
+                            logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                        try:
+                            await websocket.close()
+                        except Exception as e_close:
+                            logger.error(f"Failed to close WebSocket: {str(e_close)}")
                 elif request.provider == "openai":
                     try:
                         # Get the response and handle it properly using the previously created api_kwargs
@@ -572,13 +610,21 @@ This file contains...
                                     if text is not None:
                                         await websocket.send_text(text)
                         # Explicitly close the WebSocket connection after the response is complete
-                        await websocket.close()
+                        try:
+                            await websocket.close()
+                        except Exception as e_close:
+                            logger.error(f"Failed to close WebSocket: {str(e_close)}")
                     except Exception as e_openai:
                         logger.error(f"Error with Openai API: {str(e_openai)}")
                         error_msg = f"\nError with Openai API: {str(e_openai)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
-                        await websocket.send_text(error_msg)
-                        # Close the WebSocket connection after sending the error message
-                        await websocket.close()
+                        try:
+                            await websocket.send_text(error_msg)
+                        except Exception as e_send:
+                            logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                        try:
+                            await websocket.close()
+                        except Exception as e_close:
+                            logger.error(f"Failed to close WebSocket: {str(e_close)}")
                 else: # google
                     # Generate streaming response
                     response = model.generate_content(prompt, stream=True)
@@ -587,7 +633,10 @@ This file contains...
                         if hasattr(chunk, 'text'):
                             await websocket.send_text(chunk.text)
                     # Explicitly close the WebSocket connection after the response is complete
-                    await websocket.close()
+                    try:
+                        await websocket.close()
+                    except Exception as e_close:
+                        logger.error(f"Failed to close WebSocket: {str(e_close)}")
             else: # is_structure_request is True
                 aggregated_response_text = ""
                 if request.provider == "ollama":
@@ -627,8 +676,14 @@ This file contains...
                         if hasattr(chunk, 'text'):
                             aggregated_response_text += chunk.text
                 
-                await websocket.send_text(aggregated_response_text)
-                await websocket.close()
+                try:
+                    await websocket.send_text(aggregated_response_text)
+                except Exception as e_send:
+                    logger.error(f"Failed to send aggregated response to WebSocket: {str(e_send)}")
+                try:
+                    await websocket.close()
+                except Exception as e_close:
+                    logger.error(f"Failed to close WebSocket after aggregated response: {str(e_close)}")
 
         except Exception as e_outer:
             logger.error(f"Error in response processing: {str(e_outer)}")
@@ -671,7 +726,10 @@ This file contains...
                                 if text and not text.startswith('model=') and not text.startswith('created_at='):
                                     text = text.replace('<think>', '').replace('</think>', '')
                                     aggregated_fallback_response_text += text
-                            await websocket.send_text(aggregated_fallback_response_text)
+                            try:
+                                await websocket.send_text(aggregated_fallback_response_text)
+                            except Exception as e_send:
+                                logger.error(f"Failed to send aggregated fallback response to WebSocket: {str(e_send)}")
                     elif request.provider == "openrouter":
                         try:
                             fallback_api_kwargs = model.convert_inputs_to_api_kwargs(
@@ -685,11 +743,17 @@ This file contains...
                             else:
                                 async for chunk in fallback_response:
                                     aggregated_fallback_response_text += chunk
-                                await websocket.send_text(aggregated_fallback_response_text)
+                                try:
+                                    await websocket.send_text(aggregated_fallback_response_text)
+                                except Exception as e_send:
+                                    logger.error(f"Failed to send aggregated fallback response to WebSocket: {str(e_send)}")
                         except Exception as e_fallback:
                             logger.error(f"Error with OpenRouter API fallback: {str(e_fallback)}")
                             error_msg = f"\nError with OpenRouter API fallback: {str(e_fallback)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
-                            await websocket.send_text(error_msg)
+                            try:
+                                await websocket.send_text(error_msg)
+                            except Exception as e_send:
+                                logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
                     elif request.provider == "openai":
                         try:
                             fallback_api_kwargs = model.convert_inputs_to_api_kwargs(
@@ -715,11 +779,17 @@ This file contains...
                                             text = getattr(delta, "content", None)
                                             if text is not None:
                                                 aggregated_fallback_response_text += text
-                                await websocket.send_text(aggregated_fallback_response_text)
+                                try:
+                                    await websocket.send_text(aggregated_fallback_response_text)
+                                except Exception as e_send:
+                                    logger.error(f"Failed to send aggregated fallback response to WebSocket: {str(e_send)}")
                         except Exception as e_fallback:
                             logger.error(f"Error with OpenAI API fallback: {str(e_fallback)}")
                             error_msg = f"\nError with OpenAI API fallback: {str(e_fallback)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
-                            await websocket.send_text(error_msg)
+                            try:
+                                await websocket.send_text(error_msg)
+                            except Exception as e_send:
+                                logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
                     else: # google
                         model_config_fallback = get_model_config(request.provider, request.model) # Re-fetch in case original model was None
                         fallback_model = genai.GenerativeModel(
@@ -739,33 +809,54 @@ This file contains...
                             for chunk in fallback_response:
                                 if hasattr(chunk, 'text'):
                                     aggregated_fallback_response_text += chunk.text
-                            await websocket.send_text(aggregated_fallback_response_text)
+                            try:
+                                await websocket.send_text(aggregated_fallback_response_text)
+                            except Exception as e_send:
+                                logger.error(f"Failed to send aggregated fallback response to WebSocket: {str(e_send)}")
                     
                     # Close websocket if not already closed by provider-specific logic
-                    if not websocket.client_state == WebSocketState.DISCONNECTED:
-                         await websocket.close()
+                    try:
+                        await websocket.close()
+                    except Exception as e_close:
+                        logger.error(f"Failed to close WebSocket after fallback: {str(e_close)}")
 
                 except Exception as e2:
                     logger.error(f"Error in fallback response processing: {str(e2)}")
-                    await websocket.send_text(f"\nI apologize, but your request is too large for me to process. Please try a shorter query or break it into smaller parts.")
-                    # Close the WebSocket connection after sending the error message
-                    if not websocket.client_state == WebSocketState.DISCONNECTED:
+                    try:
+                        await websocket.send_text(f"\nI apologize, but your request is too large for me to process. Please try a shorter query or break it into smaller parts.")
+                    except Exception as e_send:
+                        logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                    try:
                         await websocket.close()
+                    except Exception as e_close:
+                        logger.error(f"Failed to close WebSocket: {str(e_close)}")
             else:
                 # For other errors, return the error message
-                await websocket.send_text(f"\nError: {error_message}")
-                # Close the WebSocket connection after sending the error message
-                if not websocket.client_state == WebSocketState.DISCONNECTED:
+                try:
+                    await websocket.send_text(f"\nError: {error_message}")
+                except Exception as e_send:
+                    logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+                try:
                     await websocket.close()
+                except Exception as e_close:
+                    logger.error(f"Failed to close WebSocket: {str(e_close)}")
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+        # Ensure WebSocket is closed if disconnect is caught here, though it should be closed by client
+        try:
+            await websocket.close()
+        except Exception as e_close:
+            logger.error(f"Failed to close WebSocket on WebSocketDisconnect: {str(e_close)}")
     except Exception as e:
         logger.error(f"Error in WebSocket handler: {str(e)}")
         try:
-            if not websocket.client_state == WebSocketState.DISCONNECTED:
-                await websocket.send_text(f"Error: {str(e)}")
-                await websocket.close()
-        except Exception as e_final:
-            logger.error(f"Error sending final error message: {str(e_final)}")
-            pass
+            await websocket.send_text(f"Error: {str(e)}")
+        except Exception as e_send:
+            logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
+        try:
+            await websocket.close()
+        except Exception as e_close:
+            logger.error(f"Failed to close WebSocket: {str(e_close)}")
+        # Pass is removed as we want to ensure closure attempts are made.
+        # If the pass was intentional for specific unhandled exceptions, it should be reviewed.
