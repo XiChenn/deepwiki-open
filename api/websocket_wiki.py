@@ -6,7 +6,7 @@ from urllib.parse import unquote
 import google.generativeai as genai
 from adalflow.components.model_client.ollama_client import OllamaClient
 from adalflow.core.types import ModelType
-from fastapi import WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import WebSocket, WebSocketDisconnect, HTTPException, WebSocketState
 from pydantic import BaseModel, Field
 
 from api.config import get_model_config
@@ -67,6 +67,21 @@ async def handle_websocket_chat(websocket: WebSocket):
         # Receive and parse the request data
         request_data = await websocket.receive_json()
         request = ChatCompletionRequest(**request_data)
+
+        # Identify if this is a structure request
+        is_structure_request = False
+        if request.messages and len(request.messages) > 0:
+            last_user_message_content = request.messages[-1].content
+            if (
+                "<file_tree>" in last_user_message_content
+                and "</file_tree>" in last_user_message_content
+                and "<readme>" in last_user_message_content
+                and "</readme>" in last_user_message_content
+                and "Return your analysis in the following XML format:" in last_user_message_content
+                and "<wiki_structure>" in last_user_message_content
+            ):
+                is_structure_request = True
+                logger.info("Structure request identified.")
 
         # Check if request contains very large input
         input_too_large = False
@@ -514,67 +529,109 @@ This file contains...
 
         # Process the response based on the provider
         try:
-            if request.provider == "ollama":
-                # Get the response and handle it properly using the previously created api_kwargs
-                response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
-                # Handle streaming response from Ollama
-                async for chunk in response:
-                    text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
-                    if text and not text.startswith('model=') and not text.startswith('created_at='):
-                        text = text.replace('<think>', '').replace('</think>', '')
-                        await websocket.send_text(text)
-                # Explicitly close the WebSocket connection after the response is complete
-                await websocket.close()
-            elif request.provider == "openrouter":
-                try:
+            if not is_structure_request:
+                if request.provider == "ollama":
                     # Get the response and handle it properly using the previously created api_kwargs
-                    logger.info("Making OpenRouter API call")
                     response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
-                    # Handle streaming response from OpenRouter
+                    # Handle streaming response from Ollama
                     async for chunk in response:
-                        await websocket.send_text(chunk)
+                        text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                        if text and not text.startswith('model=') and not text.startswith('created_at='):
+                            text = text.replace('<think>', '').replace('</think>', '')
+                            await websocket.send_text(text)
                     # Explicitly close the WebSocket connection after the response is complete
                     await websocket.close()
-                except Exception as e_openrouter:
-                    logger.error(f"Error with OpenRouter API: {str(e_openrouter)}")
-                    error_msg = f"\nError with OpenRouter API: {str(e_openrouter)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
-                    await websocket.send_text(error_msg)
-                    # Close the WebSocket connection after sending the error message
-                    await websocket.close()
-            elif request.provider == "openai":
-                try:
-                    # Get the response and handle it properly using the previously created api_kwargs
-                    logger.info("Making Openai API call")
-                    response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
-                    # Handle streaming response from Openai
-                    async for chunk in response:
-                        choices = getattr(chunk, "choices", [])
-                        if len(choices) > 0:
-                            delta = getattr(choices[0], "delta", None)
-                            if delta is not None:
-                                text = getattr(delta, "content", None)
-                                if text is not None:
-                                    await websocket.send_text(text)
+                elif request.provider == "openrouter":
+                    try:
+                        # Get the response and handle it properly using the previously created api_kwargs
+                        logger.info("Making OpenRouter API call")
+                        response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                        # Handle streaming response from OpenRouter
+                        async for chunk in response:
+                            await websocket.send_text(chunk)
+                        # Explicitly close the WebSocket connection after the response is complete
+                        await websocket.close()
+                    except Exception as e_openrouter:
+                        logger.error(f"Error with OpenRouter API: {str(e_openrouter)}")
+                        error_msg = f"\nError with OpenRouter API: {str(e_openrouter)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
+                        await websocket.send_text(error_msg)
+                        # Close the WebSocket connection after sending the error message
+                        await websocket.close()
+                elif request.provider == "openai":
+                    try:
+                        # Get the response and handle it properly using the previously created api_kwargs
+                        logger.info("Making Openai API call")
+                        response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                        # Handle streaming response from Openai
+                        async for chunk in response:
+                            choices = getattr(chunk, "choices", [])
+                            if len(choices) > 0:
+                                delta = getattr(choices[0], "delta", None)
+                                if delta is not None:
+                                    text = getattr(delta, "content", None)
+                                    if text is not None:
+                                        await websocket.send_text(text)
+                        # Explicitly close the WebSocket connection after the response is complete
+                        await websocket.close()
+                    except Exception as e_openai:
+                        logger.error(f"Error with Openai API: {str(e_openai)}")
+                        error_msg = f"\nError with Openai API: {str(e_openai)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
+                        await websocket.send_text(error_msg)
+                        # Close the WebSocket connection after sending the error message
+                        await websocket.close()
+                else: # google
+                    # Generate streaming response
+                    response = model.generate_content(prompt, stream=True)
+                    # Stream the response
+                    for chunk in response:
+                        if hasattr(chunk, 'text'):
+                            await websocket.send_text(chunk.text)
                     # Explicitly close the WebSocket connection after the response is complete
                     await websocket.close()
-                except Exception as e_openai:
-                    logger.error(f"Error with Openai API: {str(e_openai)}")
-                    error_msg = f"\nError with Openai API: {str(e_openai)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
-                    await websocket.send_text(error_msg)
-                    # Close the WebSocket connection after sending the error message
-                    await websocket.close()
-            else:
-                # Generate streaming response
-                response = model.generate_content(prompt, stream=True)
-                # Stream the response
-                for chunk in response:
-                    if hasattr(chunk, 'text'):
-                        await websocket.send_text(chunk.text)
-                # Explicitly close the WebSocket connection after the response is complete
+            else: # is_structure_request is True
+                aggregated_response_text = ""
+                if request.provider == "ollama":
+                    response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                    async for chunk in response:
+                        text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                        if text and not text.startswith('model=') and not text.startswith('created_at='):
+                            text = text.replace('<think>', '').replace('</think>', '')
+                            aggregated_response_text += text
+                elif request.provider == "openrouter":
+                    try:
+                        logger.info("Making OpenRouter API call for structure request")
+                        response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                        async for chunk in response:
+                            aggregated_response_text += chunk
+                    except Exception as e_openrouter:
+                        logger.error(f"Error with OpenRouter API (structure request): {str(e_openrouter)}")
+                        aggregated_response_text = f"\nError with OpenRouter API: {str(e_openrouter)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
+                elif request.provider == "openai":
+                    try:
+                        logger.info("Making OpenAI API call for structure request")
+                        response = await model.acall(api_kwargs=api_kwargs, model_type=ModelType.LLM)
+                        async for chunk in response:
+                            choices = getattr(chunk, "choices", [])
+                            if len(choices) > 0:
+                                delta = getattr(choices[0], "delta", None)
+                                if delta is not None:
+                                    text = getattr(delta, "content", None)
+                                    if text is not None:
+                                        aggregated_response_text += text
+                    except Exception as e_openai:
+                        logger.error(f"Error with OpenAI API (structure request): {str(e_openai)}")
+                        aggregated_response_text = f"\nError with OpenAI API: {str(e_openai)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
+                else:  # google
+                    response = model.generate_content(prompt, stream=True) # Stream=True is still used for generation, but we aggregate
+                    for chunk in response:
+                        if hasattr(chunk, 'text'):
+                            aggregated_response_text += chunk.text
+                
+                await websocket.send_text(aggregated_response_text)
                 await websocket.close()
 
         except Exception as e_outer:
-            logger.error(f"Error in streaming response: {str(e_outer)}")
+            logger.error(f"Error in response processing: {str(e_outer)}")
             error_message = str(e_outer)
 
             # Check for token limit errors
@@ -594,101 +651,121 @@ This file contains...
                     simplified_prompt += "<note>Answering without retrieval augmentation due to input size constraints.</note>\n\n"
                     simplified_prompt += f"<query>\n{query}\n</query>\n\nAssistant: "
 
+                    aggregated_fallback_response_text = ""
+
                     if request.provider == "ollama":
                         simplified_prompt += " /no_think"
-
-                        # Create new api_kwargs with the simplified prompt
                         fallback_api_kwargs = model.convert_inputs_to_api_kwargs(
-                            input=simplified_prompt,
-                            model_kwargs=model_kwargs,
-                            model_type=ModelType.LLM
+                            input=simplified_prompt, model_kwargs=model_kwargs, model_type=ModelType.LLM
                         )
-
-                        # Get the response using the simplified prompt
                         fallback_response = await model.acall(api_kwargs=fallback_api_kwargs, model_type=ModelType.LLM)
-
-                        # Handle streaming fallback_response from Ollama
-                        async for chunk in fallback_response:
-                            text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
-                            if text and not text.startswith('model=') and not text.startswith('created_at='):
-                                text = text.replace('<think>', '').replace('</think>', '')
-                                await websocket.send_text(text)
+                        if not is_structure_request:
+                            async for chunk in fallback_response:
+                                text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                                if text and not text.startswith('model=') and not text.startswith('created_at='):
+                                    text = text.replace('<think>', '').replace('</think>', '')
+                                    await websocket.send_text(text)
+                        else:
+                            async for chunk in fallback_response:
+                                text = getattr(chunk, 'response', None) or getattr(chunk, 'text', None) or str(chunk)
+                                if text and not text.startswith('model=') and not text.startswith('created_at='):
+                                    text = text.replace('<think>', '').replace('</think>', '')
+                                    aggregated_fallback_response_text += text
+                            await websocket.send_text(aggregated_fallback_response_text)
                     elif request.provider == "openrouter":
                         try:
-                            # Create new api_kwargs with the simplified prompt
                             fallback_api_kwargs = model.convert_inputs_to_api_kwargs(
-                                input=simplified_prompt,
-                                model_kwargs=model_kwargs,
-                                model_type=ModelType.LLM
+                                input=simplified_prompt, model_kwargs=model_kwargs, model_type=ModelType.LLM
                             )
-
-                            # Get the response using the simplified prompt
                             logger.info("Making fallback OpenRouter API call")
                             fallback_response = await model.acall(api_kwargs=fallback_api_kwargs, model_type=ModelType.LLM)
-
-                            # Handle streaming fallback_response from OpenRouter
-                            async for chunk in fallback_response:
-                                await websocket.send_text(chunk)
+                            if not is_structure_request:
+                                async for chunk in fallback_response:
+                                    await websocket.send_text(chunk)
+                            else:
+                                async for chunk in fallback_response:
+                                    aggregated_fallback_response_text += chunk
+                                await websocket.send_text(aggregated_fallback_response_text)
                         except Exception as e_fallback:
                             logger.error(f"Error with OpenRouter API fallback: {str(e_fallback)}")
                             error_msg = f"\nError with OpenRouter API fallback: {str(e_fallback)}\n\nPlease check that you have set the OPENROUTER_API_KEY environment variable with a valid API key."
                             await websocket.send_text(error_msg)
                     elif request.provider == "openai":
                         try:
-                            # Create new api_kwargs with the simplified prompt
                             fallback_api_kwargs = model.convert_inputs_to_api_kwargs(
-                                input=simplified_prompt,
-                                model_kwargs=model_kwargs,
-                                model_type=ModelType.LLM
+                                input=simplified_prompt, model_kwargs=model_kwargs, model_type=ModelType.LLM
                             )
-
-                            # Get the response using the simplified prompt
-                            logger.info("Making fallback Openai API call")
+                            logger.info("Making fallback OpenAI API call")
                             fallback_response = await model.acall(api_kwargs=fallback_api_kwargs, model_type=ModelType.LLM)
-
-                            # Handle streaming fallback_response from Openai
-                            async for chunk in fallback_response:
-                                text = chunk if isinstance(chunk, str) else getattr(chunk, 'text', str(chunk))
-                                await websocket.send_text(text)
+                            if not is_structure_request:
+                                async for chunk in fallback_response:
+                                    choices = getattr(chunk, "choices", [])
+                                    if len(choices) > 0:
+                                        delta = getattr(choices[0], "delta", None)
+                                        if delta is not None:
+                                            text = getattr(delta, "content", None)
+                                            if text is not None:
+                                                await websocket.send_text(text)
+                            else:
+                                async for chunk in fallback_response:
+                                    choices = getattr(chunk, "choices", [])
+                                    if len(choices) > 0:
+                                        delta = getattr(choices[0], "delta", None)
+                                        if delta is not None:
+                                            text = getattr(delta, "content", None)
+                                            if text is not None:
+                                                aggregated_fallback_response_text += text
+                                await websocket.send_text(aggregated_fallback_response_text)
                         except Exception as e_fallback:
-                            logger.error(f"Error with Openai API fallback: {str(e_fallback)}")
-                            error_msg = f"\nError with Openai API fallback: {str(e_fallback)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
+                            logger.error(f"Error with OpenAI API fallback: {str(e_fallback)}")
+                            error_msg = f"\nError with OpenAI API fallback: {str(e_fallback)}\n\nPlease check that you have set the OPENAI_API_KEY environment variable with a valid API key."
                             await websocket.send_text(error_msg)
-                    else:
-                        # Initialize Google Generative AI model
-                        model_config = get_model_config(request.provider, request.model)
+                    else: # google
+                        model_config_fallback = get_model_config(request.provider, request.model) # Re-fetch in case original model was None
                         fallback_model = genai.GenerativeModel(
-                            model_name=model_config["model"],
+                            model_name=model_config_fallback["model"],
                             generation_config={
-                                "temperature": model_config["model_kwargs"].get("temperature", 0.7),
-                                "top_p": model_config["model_kwargs"].get("top_p", 0.8),
-                                "top_k": model_config["model_kwargs"].get("top_k", 40)
+                                "temperature": model_config_fallback["model_kwargs"].get("temperature", 0.7),
+                                "top_p": model_config_fallback["model_kwargs"].get("top_p", 0.8),
+                                "top_k": model_config_fallback["model_kwargs"].get("top_k", 40)
                             }
                         )
-
-                        # Get streaming response using simplified prompt
                         fallback_response = fallback_model.generate_content(simplified_prompt, stream=True)
-                        # Stream the fallback response
-                        for chunk in fallback_response:
-                            if hasattr(chunk, 'text'):
-                                await websocket.send_text(chunk.text)
+                        if not is_structure_request:
+                            for chunk in fallback_response:
+                                if hasattr(chunk, 'text'):
+                                    await websocket.send_text(chunk.text)
+                        else:
+                            for chunk in fallback_response:
+                                if hasattr(chunk, 'text'):
+                                    aggregated_fallback_response_text += chunk.text
+                            await websocket.send_text(aggregated_fallback_response_text)
+                    
+                    # Close websocket if not already closed by provider-specific logic
+                    if not websocket.client_state == WebSocketState.DISCONNECTED:
+                         await websocket.close()
+
                 except Exception as e2:
-                    logger.error(f"Error in fallback streaming response: {str(e2)}")
+                    logger.error(f"Error in fallback response processing: {str(e2)}")
                     await websocket.send_text(f"\nI apologize, but your request is too large for me to process. Please try a shorter query or break it into smaller parts.")
                     # Close the WebSocket connection after sending the error message
-                    await websocket.close()
+                    if not websocket.client_state == WebSocketState.DISCONNECTED:
+                        await websocket.close()
             else:
                 # For other errors, return the error message
                 await websocket.send_text(f"\nError: {error_message}")
                 # Close the WebSocket connection after sending the error message
-                await websocket.close()
+                if not websocket.client_state == WebSocketState.DISCONNECTED:
+                    await websocket.close()
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"Error in WebSocket handler: {str(e)}")
         try:
-            await websocket.send_text(f"Error: {str(e)}")
-            await websocket.close()
-        except:
+            if not websocket.client_state == WebSocketState.DISCONNECTED:
+                await websocket.send_text(f"Error: {str(e)}")
+                await websocket.close()
+        except Exception as e_final:
+            logger.error(f"Error sending final error message: {str(e_final)}")
             pass

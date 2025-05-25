@@ -571,7 +571,8 @@ Remember:
         type: repoInfo.type,
         messages: [{
           role: 'user',
-content: `Analyze this GitHub repository ${owner}/${repo} and create a wiki structure for it.
+content: `Your response MUST be a single, valid XML document. Do not include any other text, explanations, or markdown formatting outside of the XML structure itself.
+Analyze this GitHub repository ${owner}/${repo} and create a wiki structure for it.
 
 1. The complete file tree of the project:
 <file_tree>
@@ -686,7 +687,9 @@ IMPORTANT:
 1. Create ${isComprehensiveView ? '8-12' : '4-6'} pages that would make a ${isComprehensiveView ? 'comprehensive' : 'concise'} wiki for this repository
 2. Each page should focus on a specific aspect of the codebase (e.g., architecture, key features, setup)
 3. The relevant_files should be actual files from the repository that would be used to generate that page
-4. Return ONLY valid XML with the structure specified above, with no markdown code block delimiters`
+4. Return ONLY valid XML with the structure specified above, with no markdown code block delimiters
+
+IMPORTANT FINAL REMINDER: Your entire response MUST consist ONLY of the XML structure described above. It must start with \`<wiki_structure>\` and end with \`</wiki_structure>\`. No other text, greetings, explanations, or markdown code fences should be present in your output.`
         }]
       };
 
@@ -792,6 +795,7 @@ IMPORTANT:
       // Extract wiki structure from response
       const xmlMatch = responseText.match(/<wiki_structure>[\s\S]*?<\/wiki_structure>/m);
       if (!xmlMatch) {
+        console.error("Failed to find <wiki_structure> tags in response. Full response received:", responseText);
         throw new Error('No valid XML found in response');
       }
 
@@ -804,6 +808,7 @@ IMPORTANT:
       // Check for parsing errors
       const parseError = xmlDoc.querySelector('parsererror');
       if (parseError) {
+        console.error("DOMParser encountered an error. XML text attempted to parse:", xmlText);
         // Log the first few elements to see what was parsed
         const elements = xmlDoc.querySelectorAll('*');
         if (elements.length > 0) {
