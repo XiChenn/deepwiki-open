@@ -123,7 +123,7 @@ async def handle_websocket_chat(websocket: WebSocket):
             if "No valid documents with embeddings found" in str(e):
                 logger.error(f"No valid embeddings found: {str(e)}")
                 try:
-                    await websocket.send_text("Error: No valid document embeddings found. This may be due to embedding size inconsistencies or API errors during document processing. Please try again or check your repository content.")
+                    await websocket.send_text("ERROR_NON_XML:Error: No valid document embeddings found. This may be due to embedding size inconsistencies or API errors during document processing. Please try again or check your repository content.")
                 except Exception as e_send:
                     logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
                 try:
@@ -134,7 +134,7 @@ async def handle_websocket_chat(websocket: WebSocket):
             else:
                 logger.error(f"ValueError preparing retriever: {str(e)}")
                 try:
-                    await websocket.send_text(f"Error preparing retriever: {str(e)}")
+                    await websocket.send_text(f"ERROR_NON_XML:Error preparing retriever: {str(e)}")
                 except Exception as e_send:
                     logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
                 try:
@@ -147,9 +147,9 @@ async def handle_websocket_chat(websocket: WebSocket):
             try:
                 # Check for specific embedding-related errors
                 if "All embeddings should be of the same size" in str(e):
-                    await websocket.send_text("Error: Inconsistent embedding sizes detected. Some documents may have failed to embed properly. Please try again.")
+                    await websocket.send_text("ERROR_NON_XML:Error: Inconsistent embedding sizes detected. Some documents may have failed to embed properly. Please try again.")
                 else:
-                    await websocket.send_text(f"Error preparing retriever: {str(e)}")
+                    await websocket.send_text(f"ERROR_NON_XML:Error preparing retriever: {str(e)}")
             except Exception as e_send:
                 logger.error(f"Failed to send error message to WebSocket: {str(e_send)}")
             try:

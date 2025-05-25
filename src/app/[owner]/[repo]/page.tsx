@@ -792,6 +792,17 @@ IMPORTANT FINAL REMINDER: Your entire response MUST consist ONLY of the XML stru
       // Clean up markdown delimiters
       responseText = responseText.replace(/^```(?:xml)?\s*/i, '').replace(/```\s*$/i, '');
 
+      // Check for ERROR_NON_XML: prefix
+      if (responseText.startsWith("ERROR_NON_XML:")) {
+        const actualErrorMessage = responseText.substring("ERROR_NON_XML:".length);
+        console.error("Backend error during wiki structure determination:", actualErrorMessage);
+        setError(actualErrorMessage);
+        setIsLoading(false);
+        setLoadingMessage(undefined);
+        setStructureRequestInProgress(false);
+        return;
+      }
+
       // Extract wiki structure from response
       const xmlMatch = responseText.match(/<wiki_structure>[\s\S]*?<\/wiki_structure>/m);
       if (!xmlMatch) {
